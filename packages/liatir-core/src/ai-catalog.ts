@@ -79,8 +79,17 @@ const UCE_4LAYER_RUNTIME_PACKAGES = [
 ];
 
 const GENEFORMER_V1_10M_REVISION = '04c2b2e84da7c0f385c3f9ad8f3ec24bab6650e5';
-const GENEFORMER_V1_10M_BASE_URL =
-	`https://huggingface.co/ctheodoris/Geneformer/resolve/${GENEFORMER_V1_10M_REVISION}`;
+const SCGPT_WHOLE_HUMAN_REVISION = 'cebd6fae655b9c585a4807daa3ac31bb764f06b4';
+
+const SCGPT_WHOLE_HUMAN_RUNTIME_PACKAGES = [
+	{ package: 'torch', version: '2.4.1', importName: 'torch' },
+	{ package: 'anndata', version: '0.10.9', importName: 'anndata' },
+	{ package: 'numpy', version: '1.26.4', importName: 'numpy' },
+	{ package: 'scipy', version: '1.14.1', importName: 'scipy' },
+	{ package: 'pandas', version: '2.2.2', importName: 'pandas' },
+	{ package: 'h5py', version: '3.11.0', importName: 'h5py' },
+	{ package: 'tqdm', version: '4.66.5', importName: 'tqdm' }
+];
 
 const GENEFORMER_V1_10M_RUNTIME_PACKAGES = [
 	{ package: 'torch', specifier: 'torch>=2.2,<3', importName: 'torch' },
@@ -99,14 +108,6 @@ const TENSORFLOW_PYTHON_3_10_TO_3_11 = {
 	maxVersionExclusive: '3.12',
 	label: 'Python 3.10 or 3.11',
 	reason: 'These TensorFlow-based regulatory genomics runtimes use TensorFlow 2.15, which is not a Python 3.12 runtime.'
-};
-
-const UCE_PYTHON_3_10_TO_3_11 = {
-	minVersion: '3.10',
-	maxVersionExclusive: '3.12',
-	label: 'Python 3.10 or 3.11',
-	reason:
-		'UCE official requirements pin torch 2.1.1 and scanpy 1.10.2; Liatir validates this runtime on Python 3.10/3.11.'
 };
 
 const INTERNAL_AI_MODEL_REGISTRY: LiatirAIModelMetadata[] = [
@@ -497,24 +498,19 @@ export const BUILT_IN_AI_MODEL_REGISTRY: LiatirAIModelMetadata[] = [
 		id: SCGPT_WHOLE_HUMAN_MODEL_ID,
 		name: 'scGPT Whole-human',
 		description:
-			'Preview single-cell foundation model for cell embeddings, integration, perturbation hypotheses, and gene-network exploration.',
+			'Packaged human single-cell foundation model for deterministic local cell embeddings.',
 		category: 'Single-cell Foundation Models',
-		version: 'whole-human',
-		releaseStage: 'preview',
+		version: 'whole-human-0.2.5',
 		runtime: {
 			kind: 'python-venv',
 			name: 'scGPT PyTorch Runtime',
-			version: 'preview'
+			version: 'python-venv'
 		},
-		source: 'managed-runtime',
+		source: 'runtime-box',
 		localOnly: true,
-		capabilities: [
-			'single-cell-embedding',
-			'batch-correction',
-			'perturbation-prediction',
-			'gene-network-inference'
-		],
+		capabilities: ['single-cell-embedding'],
 		modalities: ['single-cell'],
+		diskSizeBytes: 310_415_585,
 		license: {
 			name: 'MIT License',
 			spdxId: 'MIT',
@@ -529,20 +525,37 @@ export const BUILT_IN_AI_MODEL_REGISTRY: LiatirAIModelMetadata[] = [
 			minVramGb: 0,
 			recommendedVramGb: 16,
 			notes:
-				'CPU can load small examples, but meaningful foundation-model embedding and perturbation workflows should use a GPU.'
+				'CPU is supported but slow. Apple Metal is preferred for interactive embedding runs on supported Macs.'
+		},
+		install: {
+			method: 'runtime-box',
+			runtimeId: 'single-cell-foundation-scgpt-whole-human',
+			modelCacheSubdir: 'model-cache/scgpt-whole-human',
+			revision: SCGPT_WHOLE_HUMAN_REVISION,
+			runtimeBox: {
+				boxId: 'scgpt-whole-human',
+				channel: 'beta',
+				registryBaseUrl: 'https://models.liatir.com/v1'
+			},
+			runtimePackages: SCGPT_WHOLE_HUMAN_RUNTIME_PACKAGES,
+			hostRequirements: {
+				os: ['macos'],
+				arch: ['aarch64'],
+				reason: 'The current signed scGPT Runtime Box is built for Apple silicon Macs.'
+			}
 		},
 		documentation: {
 			liatirPath: '/ai/models/bowang-scgpt-whole-human',
 			officialUrl: 'https://github.com/bowang-lab/scGPT',
 			paperUrl: 'https://www.biorxiv.org/content/10.1101/2023.04.30.538439v2'
 		},
-		tags: ['preview', 'single-cell', 'foundation-model', 'embedding', 'perturbation']
+		tags: ['built-in', 'runtime-box', 'single-cell', 'foundation-model', 'embedding', 'human']
 	},
 	{
 		id: GENEFORMER_V1_10M_MODEL_ID,
 		name: 'Geneformer V1 10M',
 		description:
-			'Managed human single-cell transcriptome foundation model for rank-encoded cell embeddings.',
+			'Packaged human single-cell transcriptome foundation model for rank-encoded cell embeddings.',
 		category: 'Single-cell Foundation Models',
 		version: 'v1-10m',
 		runtime: {
@@ -550,12 +563,12 @@ export const BUILT_IN_AI_MODEL_REGISTRY: LiatirAIModelMetadata[] = [
 			name: 'Geneformer PyTorch Runtime',
 			version: 'python-venv'
 		},
-		source: 'managed-runtime',
+		source: 'runtime-box',
 		localOnly: true,
 		capabilities: ['single-cell-embedding'],
 		modalities: ['single-cell'],
 		parameters: 10_000_000,
-		diskSizeBytes: 43_497_615,
+		diskSizeBytes: 201_396_104,
 		license: {
 			name: 'Apache License 2.0',
 			spdxId: 'Apache-2.0',
@@ -573,55 +586,20 @@ export const BUILT_IN_AI_MODEL_REGISTRY: LiatirAIModelMetadata[] = [
 				'V1 10M can run on CPU for small datasets. CUDA or Apple Metal is preferred for larger cell batches.'
 		},
 		install: {
-			method: 'managed-runtime',
+			method: 'runtime-box',
 			runtimeId: 'single-cell-foundation-geneformer-v1-10m',
 			modelCacheSubdir: 'model-cache/geneformer-v1-10m',
 			revision: GENEFORMER_V1_10M_REVISION,
 			runtimeBox: {
 				boxId: 'geneformer-v1-10m',
 				channel: 'beta',
-				registryBaseUrl: 'https://models.liatir.app/v1'
+				registryBaseUrl: 'https://models.liatir.com/v1'
 			},
 			runtimePackages: GENEFORMER_V1_10M_RUNTIME_PACKAGES,
-			files: [
-				{
-					url: `${GENEFORMER_V1_10M_BASE_URL}/Geneformer-V1-10M/config.json`,
-					relativePath: 'model/config.json',
-					sizeBytes: 565,
-					sha256: '9cf69ca3bdb0215c4188b54c451b6f02adfe68b8f66011a57d0f32845133fd4b'
-				},
-				{
-					url: `${GENEFORMER_V1_10M_BASE_URL}/Geneformer-V1-10M/model.safetensors`,
-					relativePath: 'model/model.safetensors',
-					sizeBytes: 41_183_536,
-					sha256: 'a5e33a757431643b3697de7ef6127950cdc49e06e58d4266b3a3ab191b683f14'
-				},
-				{
-					url: `${GENEFORMER_V1_10M_BASE_URL}/geneformer/gene_dictionaries_30m/token_dictionary_gc30M.pkl`,
-					relativePath: 'dictionaries/token_dictionary_gc30M.pkl',
-					sizeBytes: 788_424,
-					sha256: 'ab9dc40973fa5224d77b793e2fd114cacf3d08423ed9c4c49caf0ba9c7f218f1'
-				},
-				{
-					url: `${GENEFORMER_V1_10M_BASE_URL}/geneformer/gene_dictionaries_30m/gene_median_dictionary_gc30M.pkl`,
-					relativePath: 'dictionaries/gene_median_dictionary_gc30M.pkl',
-					sizeBytes: 940_965,
-					sha256: 'b3b589bb5ec75040d05fc44dd6bf0184cf87f3c362cf158d196a6ed3b7fe5f39'
-				},
-				{
-					url: `${GENEFORMER_V1_10M_BASE_URL}/geneformer/gene_dictionaries_30m/ensembl_mapping_dict_gc30M.pkl`,
-					relativePath: 'dictionaries/ensembl_mapping_dict_gc30M.pkl',
-					sizeBytes: 584_125,
-					sha256: 'eac0fb0b3007267871b6305ac0003ceba19d4f28d85686cb9067ecf142787869'
-				}
-			],
 			hostRequirements: {
-				python: {
-					minVersion: '3.10',
-					maxVersionExclusive: '3.13',
-					label: 'Python 3.10, 3.11, or 3.12',
-					reason: 'The managed Geneformer V1 runtime is validated against current PyTorch and AnnData wheels for Python 3.10-3.12.'
-				}
+				os: ['macos'],
+				arch: ['aarch64'],
+				reason: 'The current signed Geneformer Runtime Box is built for Apple silicon Macs.'
 			}
 		},
 		documentation: {
@@ -629,13 +607,13 @@ export const BUILT_IN_AI_MODEL_REGISTRY: LiatirAIModelMetadata[] = [
 			officialUrl: 'https://huggingface.co/ctheodoris/Geneformer',
 			paperUrl: 'https://www.nature.com/articles/s41586-023-06139-9'
 		},
-		tags: ['built-in', 'managed', 'single-cell', 'foundation-model', 'embedding', 'human']
+		tags: ['built-in', 'runtime-box', 'single-cell', 'foundation-model', 'embedding', 'human']
 	},
 	{
 		id: UCE_4LAYER_MODEL_ID,
 		name: 'UCE 4-layer',
 		description:
-			'Managed zero-shot Universal Cell Embeddings runtime for AnnData single-cell expression embeddings.',
+			'Packaged zero-shot Universal Cell Embeddings runtime for AnnData single-cell expression embeddings.',
 		category: 'Single-cell Foundation Models',
 		version: '4-layer',
 		runtime: {
@@ -643,64 +621,60 @@ export const BUILT_IN_AI_MODEL_REGISTRY: LiatirAIModelMetadata[] = [
 			name: 'UCE PyTorch Runtime',
 			version: 'python-venv'
 		},
-		source: 'managed-runtime',
+		source: 'runtime-box',
 		localOnly: true,
 		capabilities: ['single-cell-embedding'],
 		modalities: ['single-cell'],
+		diskSizeBytes: 10_142_871_337,
 		license: {
-			name: 'MIT License',
-			spdxId: 'MIT',
-			url: 'https://github.com/snap-stanford/UCE',
-			verifiedAt: '2026-07-02'
+			name: 'MIT code / CC BY 4.0 model assets',
+			verifiedAt: '2026-07-13',
+			components: [
+				{
+					scope: 'source-code',
+					name: 'MIT License',
+					spdxId: 'MIT',
+					url: 'https://github.com/snap-stanford/UCE/blob/8ead6e07af0c80f75653598138bb704e865b45c8/LICENSE',
+					sourceUrl:
+						'https://github.com/snap-stanford/UCE/tree/8ead6e07af0c80f75653598138bb704e865b45c8',
+					attribution: 'Copyright (c) 2023 Yanay Rosen, Yusuf Roohani, Jure Leskovec',
+					verifiedAt: '2026-07-13'
+				},
+				{
+					scope: 'model-assets',
+					name: 'Creative Commons Attribution 4.0 International',
+					spdxId: 'CC-BY-4.0',
+					url: 'https://creativecommons.org/licenses/by/4.0/',
+					sourceUrl:
+						'https://figshare.com/articles/dataset/Universal_Cell_Embedding_Model_Files/24320806',
+					attribution:
+						'Roohani, Yusuf (2023). Universal Cell Embedding Model Files. figshare. Dataset. https://doi.org/10.6084/m9.figshare.24320806.v5',
+					verifiedAt: '2026-07-13'
+				}
+			]
 		},
 		hardware: {
 			cpu: true,
 			gpu: true,
 			minRamGb: 16,
-			recommendedRamGb: 32,
-			minVramGb: 0,
-			recommendedVramGb: 16,
 			notes:
-				'GPU is recommended by the model card. CPU can be used for small validation datasets, but repeated runs should use a GPU-capable workstation.'
+				'A focused 10-cell run used about 7.2 GB peak process footprint on CPU and 7.9 GB on Apple Metal on a 16 GB Apple silicon Mac. Larger datasets and batches require additional memory.'
 		},
 		install: {
-			method: 'managed-runtime',
+			method: 'runtime-box',
 			runtimeId: 'single-cell-foundation-uce',
 			modelCacheSubdir: 'model-cache/uce',
 			revision: '8ead6e07af0c80f75653598138bb704e865b45c8',
+			runtimeBox: {
+				boxId: 'uce-4layer',
+				channel: 'beta',
+				registryBaseUrl: 'https://models.liatir.com/v1'
+			},
 			runtimePackages: UCE_4LAYER_RUNTIME_PACKAGES,
-			runtimeSources: [
-				{
-					url: 'https://github.com/snap-stanford/UCE.git',
-					revision: '8ead6e07af0c80f75653598138bb704e865b45c8',
-					relativePath: 'source/UCE',
-					pythonPath: true
-				}
-			],
-			files: [
-				{
-					url: 'https://figshare.com/ndownloader/files/42706558',
-					relativePath: 'model_files/species_chrom.csv'
-				},
-				{
-					url: 'https://figshare.com/ndownloader/files/42706555',
-					relativePath: 'model_files/species_offsets.pkl'
-				},
-				{
-					url: 'https://figshare.com/ndownloader/files/42706585',
-					relativePath: 'model_files/all_tokens.torch'
-				},
-				{
-					url: 'https://figshare.com/ndownloader/files/42706576',
-					relativePath: 'model_files/4layer_model.torch'
-				},
-				{
-					url: 'https://figshare.com/ndownloader/files/42715213',
-					relativePath: 'model_files/protein_embeddings.tar.gz'
-				}
-			],
 			hostRequirements: {
-				python: UCE_PYTHON_3_10_TO_3_11
+				os: ['macos'],
+				arch: ['aarch64'],
+				reason: 'The current UCE Runtime Box is built for Apple silicon Macs.'
 			}
 		},
 		documentation: {
@@ -708,13 +682,13 @@ export const BUILT_IN_AI_MODEL_REGISTRY: LiatirAIModelMetadata[] = [
 			officialUrl: 'https://github.com/snap-stanford/UCE',
 			paperUrl: 'https://www.biorxiv.org/content/10.1101/2023.11.28.568918v2'
 		},
-		tags: ['built-in', 'managed', 'single-cell', 'foundation-model', 'embedding', 'zero-shot']
+		tags: ['built-in', 'runtime-box', 'single-cell', 'foundation-model', 'embedding', 'zero-shot']
 	},
 	{
 		id: SCFOUNDATION_100M_MODEL_ID,
 		name: 'scFoundation 100M',
 		description:
-			'Preview large-scale single-cell foundation model candidate for embeddings and downstream cell-state analysis.',
+			'License-restricted single-cell foundation model candidate. Liatir cannot redistribute its weights in a managed Runtime Box.',
 		category: 'Single-cell Foundation Models',
 		version: '100m',
 		releaseStage: 'preview',
@@ -729,10 +703,9 @@ export const BUILT_IN_AI_MODEL_REGISTRY: LiatirAIModelMetadata[] = [
 		modalities: ['single-cell'],
 		parameters: 100_000_000,
 		license: {
-			name: 'Apache License 2.0',
-			spdxId: 'Apache-2.0',
-			url: 'https://github.com/biomap-research/scFoundation',
-			verifiedAt: '2026-07-02'
+			name: 'scFoundation Model License (non-commercial research only)',
+			url: 'https://github.com/biomap-research/scFoundation/blob/397631c495eddf9ad6644fc00c6ea8139e651245/MODEL_LICENSE',
+			verifiedAt: '2026-07-12'
 		},
 		hardware: {
 			cpu: true,
@@ -749,7 +722,7 @@ export const BUILT_IN_AI_MODEL_REGISTRY: LiatirAIModelMetadata[] = [
 			officialUrl: 'https://github.com/biomap-research/scFoundation',
 			paperUrl: 'https://www.nature.com/articles/s41592-024-02305-7'
 		},
-		tags: ['preview', 'single-cell', 'foundation-model', 'embedding']
+		tags: ['preview', 'license-restricted', 'single-cell', 'foundation-model', 'embedding']
 	},
 	{
 		id: ESM2_8M_ID,

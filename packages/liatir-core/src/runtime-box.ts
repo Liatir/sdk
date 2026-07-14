@@ -13,6 +13,7 @@ export type LiatirRuntimeBoxPlatform = "macos" | "linux" | "windows";
 export type LiatirRuntimeBoxArch = "aarch64" | "x86_64";
 export type LiatirRuntimeBoxAccelerator = "cpu" | "metal" | "cuda";
 export type LiatirRuntimeBoxChannel = "development" | "beta" | "stable";
+export type LiatirRuntimeBoxHostEnvironment = "native" | "windows-wsl2";
 
 export interface LiatirRuntimeBoxTarget {
   platform: LiatirRuntimeBoxPlatform;
@@ -27,6 +28,8 @@ export interface LiatirRuntimeBoxCompatibility {
   maxLiatirVersionExclusive?: string;
   minMacosVersion?: string;
   minRamGb?: number;
+  /** Host environments validated for this payload. Omitted by legacy releases. */
+  hostEnvironments?: LiatirRuntimeBoxHostEnvironment[];
 }
 
 export interface LiatirRuntimeBoxBuildProvenance {
@@ -65,6 +68,8 @@ export interface LiatirRuntimeBoxReleaseManifest {
   target: LiatirRuntimeBoxTarget;
   compatibility: LiatirRuntimeBoxCompatibility;
   archive: LiatirRuntimeBoxArchive;
+  /** Exact sum of extracted payload file sizes before activation metadata is added. */
+  installedSizeBytes?: number;
   /** Path relative to the extracted runtime root. */
   pythonEntryPoint: string;
   /** Model/cache directory relative to the extracted runtime root. */
