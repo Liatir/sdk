@@ -27,6 +27,7 @@ export interface LiatirRuntimeBoxCompatibility {
   minLiatirVersion: string;
   maxLiatirVersionExclusive?: string;
   minMacosVersion?: string;
+  /** Minimum installed memory in decimal gigabytes (1 GB = 1,000,000,000 bytes). */
   minRamGb?: number;
   /** Minimum host NVIDIA driver accepted by a CUDA payload. */
   minNvidiaDriverVersion?: string;
@@ -44,6 +45,7 @@ export interface LiatirRuntimeBoxTargetCandidate {
   target: LiatirRuntimeBoxTarget;
   /** Native is required for current desktop selection; windows-wsl2 is future evidence only. */
   hostEnvironments: readonly LiatirRuntimeBoxHostEnvironment[];
+  /** Minimum installed memory in decimal gigabytes (1 GB = 1,000,000,000 bytes). */
   minRamGb?: number;
   /** Required for CUDA candidates so selection never guesses driver compatibility. */
   minNvidiaDriverVersion?: string;
@@ -176,6 +178,12 @@ export interface LiatirRuntimeBoxCiRunnerProfile {
   platform: LiatirRuntimeBoxPlatform;
   arch: LiatirRuntimeBoxArch;
   gpu: boolean;
+  /** Exact accelerator identity provisioned by a checked GPU runner profile. */
+  expectedGpuModel?: string;
+  /** Minimum usable GPU memory reported by the native driver. */
+  minimumGpuMemoryBytes?: number;
+  /** Exact CUDA compute capability required by the runner profile. */
+  expectedComputeCapability?: string;
   maxTimeoutMinutes: number;
 }
 
@@ -190,6 +198,8 @@ export interface LiatirRuntimeBoxCiPublicationEvidence {
   publishedAt: string;
   workflowRunId?: string;
   workflowRunUrl?: string;
+  /** Reviewed compact evidence checked in separately from the CI run artifact. */
+  evidenceRecord?: string;
 }
 
 export interface LiatirRuntimeBoxCiTargetRecord {
@@ -202,8 +212,18 @@ export interface LiatirRuntimeBoxCiTargetRecord {
   validationModes: readonly LiatirRuntimeBoxCiValidationMode[];
   timeoutMinutes: number;
   requiredBuildDiskBytes: number;
+  dependencyLockSha256: string;
+  /** Reviewed wheel-license inventory bound to this exact dependency lock. */
+  dependencyLicenseAudit?: string;
+  diskPlan: {
+    estimatedInstalledSizeBytes: number;
+    estimatedArchiveSizeBytes: number;
+    safetyMarginBytes: number;
+  };
   gpuRequired: boolean;
   nativeCiEnabled: boolean;
+  /** Windows CUDA cannot activate until this Linux CUDA target has scientific evidence. */
+  linuxValidationPrerequisiteTargetId?: string;
   publication?: LiatirRuntimeBoxCiPublicationEvidence;
 }
 
@@ -215,6 +235,8 @@ export interface LiatirRuntimeBoxCiModelRecord {
   legalStatus: "approved" | "blocked";
   validatorScript: string;
   validatorPath: string;
+  /** Product-owned runner source validated by the model-specific scientific gate. */
+  productScriptPath: string;
   callerWorkflow: string;
   targets: readonly LiatirRuntimeBoxCiTargetRecord[];
 }
@@ -222,14 +244,187 @@ export interface LiatirRuntimeBoxCiModelRecord {
 /** Machine-readable CI authority for Runtime Box runners, targets, and validation gates. */
 export interface LiatirRuntimeBoxCiCatalog {
   schemaVersion: 1;
+  costPolicy: {
+    maxPaidRunnerConcurrency: 1;
+    maxModelsPerGpuJob: 1;
+    maxTargetsPerGpuJob: 1;
+    heartbeatSeconds: number;
+    gpuManualOnly: true;
+    scheduledGpuWorkflows: false;
+    linuxCudaBeforeWindowsCuda: true;
+    cacheModelWeightsOrArchives: false;
+  };
   runnerProfiles: readonly LiatirRuntimeBoxCiRunnerProfile[];
   foundationFixtures: readonly {
     recipeId: string;
     runnerProfileId: string;
     timeoutMinutes: number;
     rustLifecycle: boolean;
+    dependencyLockSha256: string;
+    requiredBuildDiskBytes: number;
   }[];
   models: readonly LiatirRuntimeBoxCiModelRecord[];
+}
+
+export const LIATIR_RUNTIME_BOX_CI_EVIDENCE_SCHEMA_VERSION = 1 as const;
+
+export type LiatirRuntimeBoxCiEvidenceStatus = "passed" | "failed" | "cancelled" | "skipped";
+export type LiatirRuntimeBoxCiEvidencePhase =
+  | "foundation-preflight"
+  | "foundation-native"
+  | "model-validation"
+  | "production-release"
+  | "signer-deploy";
+
+export interface LiatirRuntimeBoxCiEvidenceSubject {
+  modelId?: string;
+  boxId?: string;
+  runtimeId?: string;
+  recipeId?: string;
+  recipeVersion?: string;
+  version?: string;
+  targetId?: string;
+  mode?: LiatirRuntimeBoxCiValidationMode;
+}
+
+export interface LiatirRuntimeBoxCiSourceEvidence {
+  repository: string;
+  commitSha: string;
+  sourceTreeDirty: boolean;
+}
+
+export interface LiatirRuntimeBoxCiWorkflowEvidence {
+  provider: "github-actions" | "local";
+  workflow: string | null;
+  runId: string | null;
+  runAttempt: string | null;
+  runUrl: string | null;
+  actor: string | null;
+  triggeringActor: string | null;
+  environment: string | null;
+  /** GitHub does not expose this directly on every plan; null means unavailable, not unreviewed. */
+  approver: string | null;
+}
+
+export interface LiatirRuntimeBoxCiHostEvidence {
+  platform: LiatirRuntimeBoxPlatform;
+  arch: LiatirRuntimeBoxArch;
+  runnerName: string | null;
+  runnerLabel: string | null;
+  image: string | null;
+  freeDiskBytesBefore: number;
+  minimumFreeDiskBytes: number | null;
+  peakAdditionalDiskBytes: number | null;
+  /** Existing Runtime Box build and distribution state counted before allocating new work. */
+  existingBuildStateBytes?: number;
+  /** Static peak-disk calculation checked before a native runner is allocated. */
+  calculatedDiskPlan?: {
+    sourceAssetBytes: number;
+    localSourceBytes: number;
+    estimatedInstalledSizeBytes: number;
+    estimatedArchiveSizeBytes: number;
+    safetyMarginBytes: number;
+    calculatedPeakDiskBytes: number;
+    requiredBuildDiskBytes: number;
+  };
+  gpuModel: string | null;
+  gpuCount?: number | null;
+  gpuMemoryBytes?: number | null;
+  computeCapability?: string | null;
+  driverVersion: string | null;
+  reportedCudaCompatibility: string | null;
+}
+
+export interface LiatirRuntimeBoxCiBuildEvidence {
+  recipeSha256: string;
+  dependencyLockSha256: string;
+  pythonVersion: string;
+  uvVersion: string;
+  archiveSha256: string;
+  archiveSizeBytes: number;
+  installedSizeBytes: number;
+  elapsedMs: number | null;
+  selfTest: {
+    status: "passed";
+    imports: readonly string[];
+    localSignatureVerified: boolean;
+  };
+}
+
+export interface LiatirRuntimeBoxCiScientificEvidence {
+  validator: { path: string; sha256: string };
+  productScript: { path: string; sha256: string };
+  fixture: {
+    id: string;
+    sha256: string;
+    inputShapes: Readonly<Record<string, readonly number[]>>;
+  };
+  sources: readonly {
+    kind: "source" | "checkpoint" | "asset";
+    identity: string;
+    revision: string | null;
+    sha256: string;
+  }[];
+  framework: { name: string; version: string; backend: string };
+  accelerator: {
+    kind: "cpu" | "metal" | "cuda";
+    gpuModel: string | null;
+    gpuMemoryBytes?: number | null;
+    computeCapability?: string | null;
+    driverVersion: string | null;
+    reportedCudaCompatibility: string | null;
+  };
+  outputShapes: Readonly<Record<string, readonly number[]>>;
+  finiteValues: boolean;
+  tolerances: Readonly<Record<string, number>>;
+  parity: Readonly<Record<string, number | boolean | string | null>>;
+  elapsedMs: number;
+  peakRamBytes: number | null;
+  peakVramBytes: number | null;
+  outputContract: "passed";
+  provenanceContract: "passed";
+}
+
+export interface LiatirRuntimeBoxCiPublicationEvidenceRecord {
+  signingKeyIds: readonly string[];
+  localSignatureVerified: boolean;
+  archive: { url: string; sizeBytes: number; sha256: string; streamedVerification: "passed" };
+  release: { url: string; sizeBytes: number; sha256: string; streamedVerification: "passed" };
+  channelUrl: string;
+  promotionHttpStatus: number;
+  promotionResponse: Readonly<Record<string, string | number | boolean | null>>;
+}
+
+export interface LiatirRuntimeBoxCiProductLifecycleEvidence {
+  status: "passed";
+  targetId: string;
+  version: string;
+  jobId: string;
+  analysisRunId: string;
+  accelerator: string;
+  gpuModel?: string | null;
+  computeCapability?: string | null;
+  reportedCudaCompatibility?: string | null;
+  peakVramBytes?: number | null;
+  resultArtifactCount: number;
+  assertions: Readonly<Record<string, "passed">>;
+}
+
+/** Small CI artifact and checked-in review record; Runtime Box archives never belong here. */
+export interface LiatirRuntimeBoxCiEvidenceRecord {
+  schemaVersion: typeof LIATIR_RUNTIME_BOX_CI_EVIDENCE_SCHEMA_VERSION;
+  kind: "liatir.runtime-box.ci-evidence";
+  phase: LiatirRuntimeBoxCiEvidencePhase;
+  status: LiatirRuntimeBoxCiEvidenceStatus;
+  createdAt: string;
+  subject: LiatirRuntimeBoxCiEvidenceSubject;
+  source: LiatirRuntimeBoxCiSourceEvidence;
+  workflow: LiatirRuntimeBoxCiWorkflowEvidence;
+  host?: LiatirRuntimeBoxCiHostEvidence;
+  build?: LiatirRuntimeBoxCiBuildEvidence;
+  scientific?: LiatirRuntimeBoxCiScientificEvidence;
+  productLifecycle?: LiatirRuntimeBoxCiProductLifecycleEvidence;
+  publication?: LiatirRuntimeBoxCiPublicationEvidenceRecord;
 }
 
 const RUNTIME_BOX_TARGET_ACCELERATORS: Readonly<
