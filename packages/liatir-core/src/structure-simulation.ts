@@ -191,9 +191,31 @@ function entityChainIds(entityId: string, copies = 1): string[] {
   return Array.from({ length: copies }, (_, index) => `${entityId}_${index + 1}`);
 }
 
-function boltzEntityId(entityId: string, copies = 1): string | string[] {
-  const ids = entityChainIds(entityId, copies);
-  return ids.length === 1 ? ids[0] : ids;
+/**
+ * Boltz stores chain names in a five-character numpy field, so a longer entity id is silently cut
+ * and the alignment lookup keyed by the full id then fails. Chains are named A, B, …, Z, AA, … in
+ * entity order instead, and every reference into the Boltz document goes through this map.
+ */
+function boltzChainNames(spec: LiatirComplexSpec): Map<string, string[]> {
+  const names = new Map<string, string[]>();
+  let index = 0;
+  for (const entity of spec.entities) {
+    names.set(entity.id, Array.from({ length: entity.copies ?? 1 }, () => columnLetters(index++)));
+  }
+  return names;
+}
+
+/** Spreadsheet column naming: 0 → A, 25 → Z, 26 → AA. */
+function columnLetters(index: number): string {
+  let name = "";
+  for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) {
+    name = String.fromCharCode(65 + ((n - 1) % 26)) + name;
+  }
+  return name;
+}
+
+function boltzIdField(names: string[]): string | string[] {
+  return names.length === 1 ? names[0] : names;
 }
 
 function adapterFailure<T>(validation: LiatirValidationResult, errors: string[]): LiatirAdapterResult<T> {
@@ -210,6 +232,7 @@ function constraintEntity(
 
 function boltzConstraintToken(
   spec: LiatirComplexSpec,
+  chains: Map<string, string[]>,
   ref: { entityId: string; residue?: number; atom?: string },
   label: string,
   errors: string[],
@@ -220,22 +243,24 @@ function boltzConstraintToken(
     errors.push(`${label} cannot address entity ${entity.id} because it has multiple copies.`);
     return null;
   }
+  const [chain] = chains.get(entity.id)!;
   if (entity.type === "ligand") {
     if (!ref.atom) {
       errors.push(`${label} must name an atom for ligand ${entity.id}.`);
       return null;
     }
-    return [entity.id, ref.atom];
+    return [chain, ref.atom];
   }
   if (!ref.residue) {
     errors.push(`${label} must name a residue for polymer ${entity.id}.`);
     return null;
   }
-  return [entity.id, ref.atom ?? ref.residue];
+  return [chain, ref.atom ?? ref.residue];
 }
 
 function boltzBondAtom(
   spec: LiatirComplexSpec,
+  chains: Map<string, string[]>,
   ref: { entityId: string; residue?: number; atom?: string },
   label: string,
   errors: string[],
@@ -251,7 +276,7 @@ function boltzBondAtom(
     errors.push(`${label} must name both a residue and atom; ligand residue defaults to 1.`);
     return null;
   }
-  return [entity.id, residue, ref.atom];
+  return [chains.get(entity.id)![0], residue, ref.atom];
 }
 
 /** Translate the neutral complex contract into Boltz-2's documented YAML object. */
@@ -264,8 +289,9 @@ export function adaptBoltz2Input(
   const errors: string[] = [];
   if (request.modelId !== BOLTZ_2_MODEL_ID) errors.push("Boltz adapter requires the Boltz-2 model.");
   const singleSequenceIds = new Set(request.msa.singleSequenceEntityIds);
+  const chains = boltzChainNames(request.spec);
   const sequences: LiatirBoltzSequence[] = request.spec.entities.map((entity) => {
-    const id = boltzEntityId(entity.id, entity.copies);
+    const id = boltzIdField(chains.get(entity.id)!);
     if (entity.type === "protein") {
       return { protein: { id, sequence: normalizedSequence(entity.sequence), msa: entity.msa?.path ?? (singleSequenceIds.has(entity.id) ? "empty" : "") } };
     }
@@ -282,8 +308,8 @@ export function adaptBoltz2Input(
   const constraints: Array<Record<string, unknown>> = [];
   for (const [index, constraint] of (request.spec.constraints ?? []).entries()) {
     if (constraint.type === "bond") {
-      const atom1 = boltzBondAtom(request.spec, constraint.left, `Bond ${index + 1} left side`, errors);
-      const atom2 = boltzBondAtom(request.spec, constraint.right, `Bond ${index + 1} right side`, errors);
+      const atom1 = boltzBondAtom(request.spec, chains, constraint.left, `Bond ${index + 1} left side`, errors);
+      const atom2 = boltzBondAtom(request.spec, chains, constraint.right, `Bond ${index + 1} right side`, errors);
       if (atom1 && atom2) constraints.push({ bond: { atom1, atom2 } });
       continue;
     }
@@ -296,8 +322,8 @@ export function adaptBoltz2Input(
       errors.push(`Constraint ${index + 1} has a minimum distance that Boltz-2 contact constraints cannot represent.`);
       continue;
     }
-    const token1 = boltzConstraintToken(request.spec, constraint.left, `Constraint ${index + 1} left side`, errors);
-    const token2 = boltzConstraintToken(request.spec, constraint.right, `Constraint ${index + 1} right side`, errors);
+    const token1 = boltzConstraintToken(request.spec, chains, constraint.left, `Constraint ${index + 1} left side`, errors);
+    const token2 = boltzConstraintToken(request.spec, chains, constraint.right, `Constraint ${index + 1} right side`, errors);
     if (token1 && token2) constraints.push({ contact: { token1, token2, max_distance: maxDistance, force: false } });
   }
 
@@ -312,10 +338,9 @@ export function adaptBoltz2Input(
       errors.push(`Template ${template.id} must reference a protein entity for Boltz-2.`);
       continue;
     }
-    const targetIds = boltzEntityId(entity.id, entity.copies);
     const record: Record<string, unknown> = {
       [template.format === "mmcif" ? "cif" : "pdb"]: template.path,
-      chain_id: targetIds,
+      chain_id: boltzIdField(chains.get(entity.id)!),
     };
     if (template.chainId) record.template_id = template.chainId;
     templates.push(record);
@@ -329,7 +354,7 @@ export function adaptBoltz2Input(
     } else if ((binder.copies ?? 1) !== 1) {
       errors.push("Boltz-2 affinity accepts only one copy of the ligand binder.");
     } else {
-      properties = [{ affinity: { binder: binder.id } }];
+      properties = [{ affinity: { binder: chains.get(binder.id)![0] } }];
     }
   }
 
@@ -536,6 +561,53 @@ export function validateProteinLigandAffinityValues(
     errors.push("log10(IC50) must be finite.");
   }
   return { valid: errors.length === 0, errors, warnings: [] };
+}
+
+/**
+ * The inference settings the product sends. They are fixed rather than user-facing because every
+ * retained measurement was taken at exactly these values, and a request that changed them would
+ * silently leave the evidence its hardware estimate relies on.
+ */
+export const BOLTZ_2_PRODUCT_RECYCLING_STEPS = 3 as const;
+export const BOLTZ_2_PRODUCT_SAMPLING_STEPS = 200 as const;
+/**
+ * Protenix draws several independent seeds because one seed found ubiquitin's fold in only five of
+ * eleven tries; see the decision "Protenix competes seeds because one is a coin flip".
+ */
+export const PROTENIX_PRODUCT_SEED_COUNT = 5 as const;
+export const PROTENIX_PRODUCT_RECYCLING_STEPS = 10 as const;
+export const PROTENIX_PRODUCT_DIFFUSION_STEPS = 200 as const;
+
+/** What a structure model's input preflight reports, before any checkpoint is loaded. */
+export interface LiatirStructurePreflightFacts {
+  tokenEstimate: number;
+  /** Structures the run returns: diffusion samples for Boltz-2, seeds × samples for Protenix. */
+  structureCount: number;
+  /** Sampling steps for Boltz-2, diffusion steps for Protenix. */
+  steps: number;
+  affinity: boolean;
+}
+
+/**
+ * Maps a structure request onto the dimensions a retained measurement is recorded in.
+ *
+ * The validators derive their samples the same way from each measured run, and a unit test replays
+ * every retained case through this function, so an estimate and the evidence behind it cannot drift
+ * apart. Atoms are not a dimension these preflights measure, so they hold at 1 — as tokens do for
+ * OpenMM — rather than being guessed from the sequence.
+ */
+export function structurePredictionWorkloadMetrics(
+  modelId: LiatirStructureModelId,
+  facts: LiatirStructurePreflightFacts,
+): LiatirHardwareWorkloadMetrics {
+  const boltz = modelId === BOLTZ_2_MODEL_ID;
+  return {
+    workloadId: boltz ? (facts.affinity ? "boltz-2:affinity" : "boltz-2:structure") : "protenix:structure",
+    tokenCount: facts.tokenEstimate,
+    atomCount: 1,
+    stepCount: facts.steps,
+    outputItemCount: facts.structureCount,
+  };
 }
 
 /** Metrics are produced by a lightweight input preflight, before importing the scientific runtime. */
@@ -931,16 +1003,106 @@ const OPENMM_LINUX_X86_64_CUDA129_DEVELOPMENT_PROFILE: LiatirHardwareValidationP
 };
 
 /**
+ * Boltz-2 on the experimental ubiquitin structure, the only protein it has been measured on. VRAM is
+ * a device-wide delta under WSL2, as for OpenMM. A longer sequence is beyond this evidence and must
+ * be confirmed by the user rather than estimated from 76 residues.
+ */
+const BOLTZ_2_LINUX_X86_64_CUDA129_DEVELOPMENT_PROFILE: LiatirHardwareValidationProfile = {
+  schemaVersion: 1,
+  profileId: "boltz-2-2.2.1-beta.1-linux-x86_64-cuda12.9-development-2026-09-13",
+  componentId: BOLTZ_2_MODEL_ID,
+  componentVersion: BOLTZ_2_VERSION,
+  runtimeBoxRelease: "2.2.1-beta.1",
+  target: { platform: "linux", arch: "x86_64", accelerator: "cuda", cudaVersion: "12.9" },
+  precision: "upstream default",
+  measuredAt: "2026-09-13T18:13:55.959Z",
+  evidenceRecord:
+    "runtime-boxes/measurements/boltz-2-linux-x86_64-cuda12.9-development-2026-09-13.json",
+  samples: [
+    {
+      fixtureId: "ubiquitin-single-sequence",
+      workloadId: "boltz-2:structure",
+      maxTokenCount: 76,
+      maxAtomCount: 1,
+      maxStepCount: 200,
+      maxOutputItemCount: 1,
+      peakRamBytes: 5679542272,
+      peakVramBytes: 2518679552,
+      elapsedMs: 65546,
+      outputBytes: 108042,
+    },
+    {
+      fixtureId: "ubiquitin-repeat-seed-17",
+      workloadId: "boltz-2:structure",
+      maxTokenCount: 76,
+      maxAtomCount: 1,
+      maxStepCount: 200,
+      maxOutputItemCount: 1,
+      peakRamBytes: 5709299712,
+      peakVramBytes: 2496659456,
+      elapsedMs: 61076,
+      outputBytes: 108042,
+    },
+  ],
+};
+
+/**
+ * Protenix base v1.0.0 on the same ubiquitin structure, at the product's own settings: five competing
+ * seeds of five samples each, so every retained sample drew 25 structures. bf16 is Protenix's CLI
+ * default and the product does not override it.
+ */
+const PROTENIX_BASE_V1_LINUX_X86_64_CUDA126_DEVELOPMENT_PROFILE: LiatirHardwareValidationProfile = {
+  schemaVersion: 1,
+  profileId: "protenix-base-1.0.0-beta.1-linux-x86_64-cuda12.6-development-2026-09-13",
+  componentId: PROTENIX_BASE_V1_MODEL_ID,
+  componentVersion: PROTENIX_BASE_V1_VERSION,
+  runtimeBoxRelease: "1.0.0-beta.1",
+  target: { platform: "linux", arch: "x86_64", accelerator: "cuda", cudaVersion: "12.6" },
+  precision: "bf16",
+  measuredAt: "2026-09-13T18:25:07.649Z",
+  evidenceRecord:
+    "runtime-boxes/measurements/protenix-base-v1-0-0-linux-x86_64-cuda12.6-development-2026-09-13.json",
+  samples: [
+    {
+      fixtureId: "ubiquitin-single-sequence",
+      workloadId: "protenix:structure",
+      maxTokenCount: 76,
+      maxAtomCount: 1,
+      maxStepCount: 200,
+      maxOutputItemCount: 25,
+      peakRamBytes: 4774428672,
+      peakVramBytes: 3414163456,
+      elapsedMs: 274672,
+      outputBytes: 1559791,
+    },
+    {
+      fixtureId: "ubiquitin-repeat-seed-17",
+      workloadId: "protenix:structure",
+      maxTokenCount: 76,
+      maxAtomCount: 1,
+      maxStepCount: 200,
+      maxOutputItemCount: 25,
+      peakRamBytes: 4725166080,
+      peakVramBytes: 3395289088,
+      elapsedMs: 276803,
+      outputBytes: 1559738,
+    },
+  ],
+};
+
+/**
  * Retained Phase 3 measurements that the product may use as run envelopes.
  *
  * A profile is added only after its exact target validator has produced reviewable evidence, so an
  * unmeasured component, release or target still fails closed instead of inventing a memory or
- * runtime estimate. Boltz-2, Protenix v2 and Protenix Mini Default have no measurement yet.
+ * runtime estimate. Protenix v2 and Protenix Mini Default have no measurement yet.
  */
 export const LIATIR_PHASE3_HARDWARE_VALIDATION_PROFILES:
   readonly LiatirHardwareValidationProfile[] = [
     OPENMM_MACOS_AARCH64_CPU_DEVELOPMENT_PROFILE,
     OPENMM_LINUX_X86_64_CUDA129_DEVELOPMENT_PROFILE,
+    BOLTZ_2_LINUX_X86_64_CUDA129_DEVELOPMENT_PROFILE,
+    PROTENIX_BASE_V1_LINUX_X86_64_CUDA126_DEVELOPMENT_PROFILE,
   ];
 
 export function phase3HardwareValidationProfile(input: {
